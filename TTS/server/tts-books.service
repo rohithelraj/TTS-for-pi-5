@@ -1,0 +1,18 @@
+# systemd unit for the TTS audiobook server on a Raspberry Pi. See README.md ("Raspberry Pi 5").
+# Adjust User and the paths, then copy to /etc/systemd/system/tts-books.service.
+[Unit]
+Description=Coqui TTS audiobook server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/coqui-tts
+Environment=OMP_NUM_THREADS=4
+ExecStart=/home/pi/tts-venv/bin/tts-server --model_name tts_models/en/vctk/vits --book_watch_dir /home/pi/books
+Restart=on-failure
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

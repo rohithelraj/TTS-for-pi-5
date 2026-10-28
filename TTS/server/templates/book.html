@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>TTS audiobooks</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css"
+        integrity="sha384-WskhaSGFgHYWDcbwN70/dfYBj47jz9qbsMId/iRN3ewGhXQFZCSftd1LZCfmhktB" crossorigin="anonymous"
+        rel="stylesheet">
+    <style>
+        body {
+            padding-top: 32px;
+        }
+
+        textarea {
+            font-family: monospace;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h2>Audiobooks</h2>
+        <p>
+            Upload a Book Markdown file (see <code>BOOK_FORMAT.md</code>) and download it as
+            {{ formats | join(', ') }} when it is done.
+            <a href="{{ url_for('book_voices') }}">Browse voices</a> · <a href="{{ url_for('index') }}">Quick TTS</a>
+        </p>
+        {% if watch_dir %}
+        <p class="text-muted">Also watching <code>{{ watch_dir }}</code>: files dropped there are rendered next to
+            the markdown file.</p>
+        {% endif %}
+
+        <form id="book-form" class="mb-4">
+            <div class="form-group">
+                <input type="file" id="file" accept=".md,.markdown,.txt" class="form-control-file">
+            </div>
+            <div class="form-group">
+                <textarea id="text" rows="10" class="form-control" placeholder="...or paste Book Markdown here"></textarea>
+            </div>
+            <button type="button" id="validate-button" class="btn btn-secondary">Check</button>
+            <button type="submit" id="submit-button" class="btn btn-primary">Render</button>
+        </form>
+        <pre id="message" class="alert" hidden></pre>
+
+        <h4>Jobs</h4>
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Book</th>
+                    <th>Status</th>
+                    <th>Length</th>
+                    <th>Download</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="jobs"></tbody>
+        </table>
+    </div>
+
+    <script>
+        function q(selector) { return document.querySelector(selector) }
+
+        function el(tag, text, attrs = {}) {
+            const node = document.createElement(tag)
+            if (text !== undefined) node.textContent = text
+            Object.assign(node, attrs)
+            return node
+        }
+
+        function showMessage(text, ok) {
+            const msg = q('#message')
+            msg.textContent = text
+            msg.className = 'alert ' + (ok ? 'alert-success' : 'alert-danger')
+            msg.hidden = false
+        }
+
+        function formData() {
+            const data = new FormData()
+            const file = q('#file').files[0]
+            if (file) {
+                data.append('file', file)
+            } else if (q('#text').value.trim()) {
+                data.append('text', q('#text').value)
+                data.append('name', 'pasted.md')
+            } else {
+                return null
+            }
+            return data
+        }
+
+        async function post(url) {
+            const data = formData()
+            if (!data) { showMessage('Choose a file or paste some markdown first.', false); return null }
+            const res = await fetch(url, { method: 'POST', body: data })
+            const body = await res.json()
+            if (!res.ok) { showMessage(body.error, false); return null }
+            return body
+        }
+
+        function describe(summary) {
+            const chapters = summary.chapters.map(c => `  ${c.title} (${c.words} words)`).join('\n')
+            let text = `${summary.title}: ${summary.words} words, ~${summary.estimated_minutes} min of audio\n`
+            text += `Voices used: ${summary.voices_used.join(', ')}\n`
+            if (summary.voices_unused.length) text += `Defined but unused: ${summary.voices_unused.join(', ')}\n`
+            return text + `Chapters:\n${chapters}`
+        }
+
+        q('#validate-button').addEventListener('click', async () => {
+            const body = await post('/api/book/validate')
+            if (body) showMessage('Looks good.\n' + describe(body), true)
+        })
+
+        q('#book-form').addEventListener('submit', async (e) => {
+            e.preventDefault()
+            q('#submit-button').disabled = true
+            try {
+                const job = await post('/api/book')
+                if (job) {
+                    showMessage('Queued.\n' + describe(job.summary), true)
+                    q('#book-form').reset()
+                    refresh()
+                }
+            } finally {
+                q('#submit-button').disabled = false
+            }
+        })
+
+        function minutes(seconds) { return `${Math.round(seconds / 60 * 10) / 10} min` }
+
+        async function refresh() {
+            const res = await fetch('/api/books', { cache: 'no-cache' })
+            const jobs = await res.json()
+            const tbody = q('#jobs')
+            tbody.replaceChildren()
+            for (const job of jobs) {
+                const row = el('tr')
+                row.append(el('td', job.name))
+
+                let status = job.status
+                if (job.status === 'running') status += ` ${Math.round(job.progress * 100)}%`
+                if (job.status === 'done' && job.stats) status += ` (rtf ${job.stats.rtf})`
+                const statusCell = el('td', status)
+                if (job.error) statusCell.append(el('div', job.error, { className: 'small text-danger' }))
+                row.append(statusCell)
+
+                row.append(el('td', job.stats ? minutes(job.stats.audio_seconds) : `~${job.summary.estimated_minutes} min`))
+
+                const links = el('td')
+                for (const fmt of Object.keys(job.outputs)) {
+                    links.append(el('a', fmt, { href: `/api/book/${job.id}/${fmt}`, className: 'mr-2' }))
+                }
+                row.append(links)
+
+                const del = el('button', job.status === 'running' ? 'cancel' : 'delete', { className: 'btn btn-sm btn-outline-danger' })
+                del.addEventListener('click', async () => {
+                    if (!confirm(`Delete ${job.name}?`)) return
+                    await fetch(`/api/book/${job.id}`, { method: 'DELETE' })
+                    refresh()
+                })
+                const delCell = el('td')
+                delCell.append(del)
+                row.append(delCell)
+                tbody.append(row)
+            }
+        }
+
+        refresh()
+        setInterval(refresh, 3000)
+    </script>
+</body>
+
+</html>

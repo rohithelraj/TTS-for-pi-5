@@ -9,9 +9,13 @@ from threading import Lock
 from typing import Union
 from urllib.parse import parse_qs
 
-from flask import Flask, render_template, render_template_string, request, send_file
+from flask import Flask, abort, jsonify, render_template, render_template_string, request, send_file
 
 from TTS.config import load_config
+from TTS.server.book.jobs import JobQueue, safe_name
+from TTS.server.book.parser import BookError, summarize
+from TTS.server.book.renderer import FORMATS, has_ffmpeg
+from TTS.server.book.watcher import FolderWatcher
 from TTS.utils.manage import ModelManager
 from TTS.utils.synthesizer import Synthesizer
 
@@ -54,6 +58,25 @@ def create_argparser():
     parser.add_argument("--vocoder_config_path", type=str, help="Path to vocoder model config file.", default=None)
     parser.add_argument("--speakers_file_path", type=str, help="JSON file for multi-speaker model.", default=None)
     parser.add_argument("--port", type=int, default=5002, help="port to listen on.")
+    parser.add_argument("--host", type=str, default="::", help="address to listen on.")
+    parser.add_argument(
+        "--book_data_dir",
+        type=str,
+        default="~/.local/share/tts-books",
+        help="where uploaded books, rendered audiobooks and the job list are stored.",
+    )
+    parser.add_argument(
+        "--book_watch_dir",
+        type=str,
+        default=None,
+        help="folder to watch for Book Markdown files; audio is written next to each file.",
+    )
+    parser.add_argument(
+        "--book_formats",
+        type=str,
+        default="mp3,m4b",
+        help=f"comma separated audiobook output formats, any of: {','.join(FORMATS)}.",
+    )
     parser.add_argument("--use_cuda", type=convert_boolean, default=False, help="true to use CUDA.")
     parser.add_argument("--debug", type=convert_boolean, default=False, help="true to enable Flask debug mode.")
     parser.add_argument("--show_details", type=convert_boolean, default=False, help="Generate model detail page.")
@@ -126,6 +149,18 @@ language_manager = getattr(synthesizer.tts_model, "language_manager", None)
 # TODO: set this from SpeakerManager
 use_gst = synthesizer.tts_config.get("use_gst", False)
 app = Flask(__name__)
+lock = Lock()
+
+book_formats = [f.strip() for f in args.book_formats.split(",") if f.strip()]
+if not has_ffmpeg() and set(book_formats) - {"wav"}:
+    print(" > ffmpeg not found, audiobooks will be rendered as wav only.")
+    book_formats = ["wav"]
+speaker_ids = sorted(speaker_manager.name_to_id) if use_multi_speaker and speaker_manager is not None else []
+# with --debug, Flask's reloader also imports this module in a supervisor process that serves no
+# requests; only start the book worker in the serving process so jobs don't render twice
+if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    book_jobs = JobQueue(synthesizer, lock, args.book_data_dir, book_formats, speaker_ids)
+    book_watcher = FolderWatcher(args.book_watch_dir, book_jobs) if args.book_watch_dir else None
 
 
 def style_wav_uri_to_dict(style_wav: str) -> Union[str, dict]:
@@ -183,9 +218,6 @@ def details():
         vocoder_config=vocoder_config,
         args=args.__dict__,
     )
-
-
-lock = Lock()
 
 
 @app.route("/api/tts", methods=["GET", "POST"])
@@ -250,8 +282,77 @@ def mary_tts_api_process():
     return send_file(out, mimetype="audio/wav")
 
 
+# Audiobooks from Book Markdown, see BOOK_FORMAT.md
+
+
+def _book_request_markdown():
+    """Book markdown from a multipart `file`, a `text` form field, or the raw request body."""
+    upload = request.files.get("file")
+    if upload is not None:
+        return upload.read().decode("utf-8"), upload.filename
+    if "text" in request.form:
+        return request.form["text"], request.form.get("name") or "book.md"
+    return request.get_data(as_text=True), request.args.get("name") or "book.md"
+
+
+@app.route("/book")
+def book_index():
+    return render_template("book.html", formats=book_formats, watch_dir=args.book_watch_dir)
+
+
+@app.route("/book/voices")
+def book_voices():
+    return render_template("book_voices.html", speaker_ids=speaker_ids)
+
+
+@app.route("/api/book/validate", methods=["POST"])
+def book_validate():
+    md, _ = _book_request_markdown()
+    try:
+        book = book_jobs.validate(md)
+    except BookError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, **summarize(book)})
+
+
+@app.route("/api/book", methods=["POST"])
+def book_submit():
+    md, name = _book_request_markdown()
+    try:
+        job = book_jobs.submit(md, name=name)
+    except BookError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(job), 202
+
+
+@app.route("/api/books", methods=["GET"])
+def book_list():
+    return jsonify(book_jobs.list_jobs())
+
+
+@app.route("/api/book/<job_id>", methods=["GET", "DELETE"])
+def book_job(job_id):
+    if request.method == "DELETE":
+        if not book_jobs.delete(job_id):
+            abort(404)
+        return "", 204
+    job = book_jobs.get(job_id)
+    if job is None:
+        abort(404)
+    return jsonify(job)
+
+
+@app.route("/api/book/<job_id>/<fmt>", methods=["GET"])
+def book_download(job_id, fmt):
+    path = book_jobs.output_path(job_id, fmt)
+    if path is None:
+        abort(404)
+    name = safe_name(book_jobs.get(job_id)["name"])
+    return send_file(path, as_attachment=True, download_name=f"{name}.{fmt}")
+
+
 def main():
-    app.run(debug=args.debug, host="::", port=args.port)
+    app.run(debug=args.debug, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

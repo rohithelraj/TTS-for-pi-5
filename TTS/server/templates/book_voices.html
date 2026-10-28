@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>TTS voices</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css"
+        integrity="sha384-WskhaSGFgHYWDcbwN70/dfYBj47jz9qbsMId/iRN3ewGhXQFZCSftd1LZCfmhktB" crossorigin="anonymous"
+        rel="stylesheet">
+    <style>
+        body {
+            padding-top: 32px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h2>Voices</h2>
+        <p><a href="{{ url_for('book_index') }}">Back to audiobooks</a></p>
+        {% if speaker_ids %}
+        <p>Use these ids in the <code>voices:</code> front matter of your book.</p>
+        <div class="form-group">
+            <input id="sample" class="form-control"
+                value="&quot;I never said that,&quot; she whispered, glancing at the door.">
+        </div>
+        <audio id="audio" controls hidden class="mb-3"></audio>
+        <p id="message" class="text-danger"></p>
+        <div class="d-flex flex-wrap">
+            {% for speaker_id in speaker_ids %}
+            <button class="btn btn-outline-primary btn-sm m-1 preview" data-speaker="{{ speaker_id }}">{{ speaker_id
+                }}</button>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p>The loaded model has a single voice. Use any id in <code>voices:</code>; every character will sound the
+            same. Start the server with <code>--model_name tts_models/en/vctk/vits</code> for 109 voices.</p>
+        {% endif %}
+    </div>
+
+    <script>
+        function q(selector) { return document.querySelector(selector) }
+        document.querySelectorAll('.preview').forEach(button => {
+            button.addEventListener('click', async () => {
+                const speaker = button.dataset.speaker
+                q('#message').textContent = `Synthesizing ${speaker}...`
+                try {
+                    const res = await fetch(`/api/tts?text=${encodeURIComponent(q('#sample').value)}&speaker_id=${encodeURIComponent(speaker)}`)
+                    if (!res.ok) throw Error(res.statusText)
+                    q('#audio').src = URL.createObjectURL(await res.blob())
+                    q('#audio').hidden = false
+                    q('#audio').play()
+                    q('#message').textContent = ''
+                } catch (err) {
+                    q('#message').textContent = 'Error: ' + err.message
+                }
+            })
+        })
+    </script>
+</body>
+
+</html>
