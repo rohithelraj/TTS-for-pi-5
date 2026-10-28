@@ -43,6 +43,40 @@ The book format is described in [`TTS/server/BOOK_FORMAT.md`](TTS/server/BOOK_FO
    sudo apt update && sudo apt full-upgrade -y && sudo reboot
    ```
 
+## Quick start with Docker (instead of steps 3–6)
+
+If you'd rather not install Python and packages on the Pi itself, run the server in Docker. The
+image uses Python 3.11 and CPU-only PyTorch, and includes `espeak-ng` and `ffmpeg`, so no host
+packages are needed beyond Docker.
+
+```bash
+# Docker, plus permission to use it without sudo (log out and back in afterwards)
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+
+# get the code
+git clone https://github.com/rohithelraj/TTS-for-pi-5.git ~/TTS-for-pi-5
+cd ~/TTS-for-pi-5
+git checkout feat/markdown-audiobooks   # until this branch is merged into dev
+
+# build and start (the first build takes a while)
+mkdir -p ~/books ~/tts-data
+docker compose -f docker-compose.pi.yml up -d --build
+docker compose -f docker-compose.pi.yml logs -f      # Ctrl+C to leave
+```
+
+- The server is at `http://tts-pi.local:5002/book`, the same as with the manual install.
+- `~/books` is the watch folder, and `~/tts-data` holds the downloaded model and the book jobs.
+  Both are kept when you rebuild the image.
+- The container restarts on its own after a crash or a reboot (`restart: unless-stopped`), so you
+  don't need the systemd step.
+- It uses host networking, so it also works on IPv6-only networks, where Docker's default
+  bridge network has no internet access.
+- To update: `git pull`, then run the same `up -d --build` command again.
+- To stop: `docker compose -f docker-compose.pi.yml down`.
+
+Step 7 (Samba) works the same way, because the watch folder is still `~/books` on the Pi.
+
 ## 3. Install system packages
 
 ```bash
@@ -223,6 +257,8 @@ sudo systemctl restart tts-books
 | Books render as `.wav` only | `ffmpeg` is missing: `sudo apt install ffmpeg`, then restart |
 | Rendering is very slow | Check for throttling: `vcgencmd get_throttled` should print `0x0`. Add cooling. Don't run other heavy work at the same time. |
 | Killed / out of memory during install | Add temporary swap, then retry: `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` (gone after reboot) |
+| Model download fails (`coqui.gateway.scarf.sh` / GitHub unreachable) | Your network may be IPv6-only: check that `ip -4 route` shows a `default` route. The model host is IPv4-only, so turn on IPv4 or NAT64 on your router, or download `tts_models--en--vctk--vits.zip` on another computer and unzip it into `~/.local/share/tts/` (Docker: `~/tts-data/tts/`). |
+| Docker build: `Temporary failure resolving 'deb.debian.org'` | Same cause: Docker builds use an IPv4-only network. Build while the Pi has IPv4. |
 | Unknown speaker id error on upload | The id isn't in the model. Pick one from `/book/voices`. |
 
 ## Security

@@ -1,0 +1,16 @@
+# Audiobook server on a Raspberry Pi 5:  docker compose -f docker-compose.pi.yml up -d --build
+services:
+  tts-books:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.pi
+    image: tts-books:pi
+    restart: unless-stopped
+    # Host networking: the server listens on port 5002 directly on the Pi, and keeps working on
+    # IPv6-only networks, where Docker's IPv4-only default bridge has no internet access.
+    network_mode: host
+    # Run as your user so rendered audio in ~/books is owned by you, not root.
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ${HOME}/tts-data:/data
+      - ${HOME}/books:/books

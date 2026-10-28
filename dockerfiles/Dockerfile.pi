@@ -1,0 +1,20 @@
+# CPU-only image for the audiobook server on a Raspberry Pi 5 (arm64). See RASPBERRY_PI_5.md.
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ make espeak-ng ffmpeg libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU wheels of torch, so pip doesn't pull the CUDA packages.
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+WORKDIR /app
+COPY . /app
+RUN pip install --no-cache-dir -e . "setuptools<81"
+
+# Models go to /data/tts and book jobs to /data/tts-books, so both survive container rebuilds.
+ENV HOME=/data XDG_DATA_HOME=/data OMP_NUM_THREADS=4
+EXPOSE 5002
+
+ENTRYPOINT ["tts-server"]
+CMD ["--model_name", "tts_models/en/vctk/vits", "--book_data_dir", "/data/tts-books", "--book_watch_dir", "/books"]
