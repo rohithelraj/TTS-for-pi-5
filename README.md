@@ -1,3 +1,6 @@
+> **Raspberry Pi 5 audiobook server:** see [RASPBERRY_PI_5.md](RASPBERRY_PI_5.md) to run this fork on a Pi 5
+> and turn Markdown books into multi-voice audiobooks on your local network.
+
 
 ## 🐸Coqui.ai News
 - 📣 ⓍTTSv2 is here with 16 languages and better performance across the board.

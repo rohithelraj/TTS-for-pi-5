@@ -51,29 +51,5 @@ It writes `chapter1.book.md`, assigns voices, and lists any dialogue it had to g
 
 ### Raspberry Pi 5
 
-Use Raspberry Pi OS 64-bit (Bookworm). An 8 GB board and active cooling are recommended, because
-rendering keeps all 4 cores busy for a long time. Expect roughly real-time speed with
-`tts_models/en/vctk/vits`. Each finished job shows its real-time factor (`rtf`).
-
-```bash
-sudo apt install -y python3-venv python3-dev espeak-ng ffmpeg libsndfile1 git build-essential
-git clone <this repo> ~/coqui-tts && cd ~/coqui-tts
-python3 -m venv ~/tts-venv && ~/tts-venv/bin/pip install -e . "setuptools<81"  # librosa needs pkg_resources
-# first run downloads the model (~150 MB)
-~/tts-venv/bin/tts-server --model_name tts_models/en/vctk/vits --book_watch_dir ~/books
-```
-
-To run it on boot, edit the user and paths in [`tts-books.service`](tts-books.service), then:
-
-```bash
-sudo cp TTS/server/tts-books.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tts-books
-journalctl -u tts-books -f
-```
-
-On the local network:
-- The Pi announces itself over mDNS by default, so the UI is at `http://<hostname>.local:5002/book`
-  (install `avahi-daemon` if it doesn't resolve).
-- To use the watch folder from other computers, share it with Samba
-  (`sudo apt install samba` and add a share for `~/books` to `/etc/samba/smb.conf`).
-- The server has no authentication. Keep it on your home network and don't forward the port.
+See [RASPBERRY_PI_5.md](../../RASPBERRY_PI_5.md) for the full setup guide: OS, install, systemd,
+Samba watch folder, and troubleshooting.
